@@ -1,0 +1,54 @@
+[package]
+name = "ducat-gateway"
+version = "1.0.0"
+edition = "2021"
+description = "DUCAT Oracle Gateway Server - Privacy-preserving threshold commitment oracle"
+license = "MIT"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.4", features = ["timeout", "limit"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+http = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Cryptography
+secp256k1 = { version = "0.29", features = ["recovery", "rand-std"] }
+sha2 = "0.10"
+ripemd = "0.1"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.8"
+getrandom = "0.2"
+
+# Ethereum signing
+k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
+sha3 = "0.10"
+subtle = "2"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Metrics
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+anyhow = "1"
+parking_lot = "0.12"
+dashmap = "6"
+
+[dev-dependencies]
+tokio-test = "0.4"
+serial_test = "3"
