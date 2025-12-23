@@ -48,6 +48,24 @@ pub struct PriceContractResponse {
     pub thold_price: i64,
 }
 
+/// Quote response with collateral ratio (returned to frontend)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuoteResponse {
+    pub chain_network: String,
+    pub oracle_pubkey: String,
+    pub base_price: i64,
+    pub base_stamp: i64,
+    pub commit_hash: String,
+    pub contract_id: String,
+    pub oracle_sig: String,
+    pub thold_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thold_key: Option<String>,
+    pub thold_price: i64,
+    /// Collateral ratio as percentage (e.g., 135.0 for 135%)
+    pub collateral_ratio: f64,
+}
+
 /// Create quote request (query params)
 #[derive(Debug, Deserialize)]
 pub struct CreateRequest {

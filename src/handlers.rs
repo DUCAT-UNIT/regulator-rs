@@ -18,11 +18,13 @@ use crate::metrics;
 /// Webhook replay protection cache TTL (5 minutes)
 const WEBHOOK_CACHE_TTL_SECS: i64 = 300;
 
+use crate::cache::{CachedPrice, QuoteCache};
 use crate::config::GatewayConfig;
 use crate::crypto::{
     generate_jwt, generate_request_id, get_tag, sha256_hex, truncate_event_id,
     verify_webhook_signature,
 };
+use crate::nostr::{calculate_commit_hash, calculate_collateral_ratio, NostrClient};
 use crate::types::*;
 
 /// Constant-time string comparison to prevent timing attacks
@@ -46,18 +48,25 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Webhook replay protection cache: event_id -> timestamp
     pub processed_webhooks: RwLock<HashMap<String, i64>>,
+    /// Quote and price cache
+    pub quote_cache: QuoteCache,
+    /// Nostr relay client
+    pub nostr_client: NostrClient,
 }
 
 impl AppState {
     pub fn new(config: GatewayConfig) -> anyhow::Result<Self> {
+        let nostr_client = NostrClient::new(config.nostr_relay_url.clone());
         Ok(Self {
-            config,
             pending_requests: DashMap::new(),
             start_time: Instant::now(),
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             processed_webhooks: RwLock::new(HashMap::new()),
+            quote_cache: QuoteCache::new(1000), // Cache up to 1000 quotes
+            nostr_client,
+            config,
         })
     }
 
@@ -96,7 +105,13 @@ impl AppState {
     }
 }
 
-/// GET /api/quote?th=PRICE - Create threshold commitment
+/// GET /api/quote?th=PRICE - Get quote for threshold price
+///
+/// New flow:
+/// 1. Check if we have cached price data
+/// 2. Calculate commit_hash locally for the requested thold_price
+/// 3. Try to fetch pre-baked quote from Nostr by d-tag (commit_hash)
+/// 4. If not found, fall back to triggering CRE workflow
 pub async fn handle_create(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CreateRequest>,
@@ -110,6 +125,118 @@ pub async fn handle_create(
             .into_response();
     }
 
+    let thold_price = params.th as u32;
+
+    // Step 1: Get cached price data
+    let cached_price = match state.quote_cache.get_price() {
+        Some(price) => price,
+        None => {
+            tracing::warn!("No cached price available, falling back to CRE");
+            return fallback_to_cre(&state, params.th).await;
+        }
+    };
+
+    // Step 2: Calculate commit_hash locally
+    let commit_hash = match calculate_commit_hash(
+        &state.config.oracle_pubkey,
+        &state.config.chain_network,
+        cached_price.base_price,
+        cached_price.base_stamp,
+        thold_price,
+    ) {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to calculate commit_hash");
+            return fallback_to_cre(&state, params.th).await;
+        }
+    };
+
+    tracing::info!(
+        thold_price = thold_price,
+        commit_hash = %commit_hash,
+        base_price = cached_price.base_price,
+        "Looking up pre-baked quote"
+    );
+
+    // Step 3: Try to get from local cache first
+    if let Some(quote) = state.quote_cache.get_quote(&commit_hash) {
+        let collateral_ratio = calculate_collateral_ratio(
+            cached_price.base_price,
+            quote.thold_price as u32,
+        );
+
+        tracing::info!(
+            commit_hash = %commit_hash,
+            collateral_ratio = collateral_ratio,
+            "Quote found in local cache"
+        );
+
+        let response = QuoteResponse {
+            chain_network: quote.chain_network,
+            oracle_pubkey: quote.oracle_pubkey,
+            base_price: quote.base_price,
+            base_stamp: quote.base_stamp,
+            commit_hash: quote.commit_hash,
+            contract_id: quote.contract_id,
+            oracle_sig: quote.oracle_sig,
+            thold_hash: quote.thold_hash,
+            thold_key: quote.thold_key,
+            thold_price: quote.thold_price,
+            collateral_ratio,
+        };
+
+        return (StatusCode::OK, Json(serde_json::to_value(response).unwrap())).into_response();
+    }
+
+    // Step 4: Try to fetch from Nostr relay
+    match state.nostr_client.fetch_quote_by_dtag(&commit_hash).await {
+        Ok(Some(quote)) => {
+            let collateral_ratio = calculate_collateral_ratio(
+                cached_price.base_price,
+                quote.thold_price as u32,
+            );
+
+            tracing::info!(
+                commit_hash = %commit_hash,
+                collateral_ratio = collateral_ratio,
+                "Quote fetched from Nostr"
+            );
+
+            // Cache for future requests
+            state.quote_cache.store_quote(commit_hash.clone(), quote.clone());
+
+            let response = QuoteResponse {
+                chain_network: quote.chain_network,
+                oracle_pubkey: quote.oracle_pubkey,
+                base_price: quote.base_price,
+                base_stamp: quote.base_stamp,
+                commit_hash: quote.commit_hash,
+                contract_id: quote.contract_id,
+                oracle_sig: quote.oracle_sig,
+                thold_hash: quote.thold_hash,
+                thold_key: quote.thold_key,
+                thold_price: quote.thold_price,
+                collateral_ratio,
+            };
+
+            (StatusCode::OK, Json(serde_json::to_value(response).unwrap())).into_response()
+        }
+        Ok(None) => {
+            tracing::info!(
+                commit_hash = %commit_hash,
+                "Quote not found in Nostr, falling back to CRE"
+            );
+            fallback_to_cre(&state, params.th).await
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to fetch from Nostr, falling back to CRE");
+            fallback_to_cre(&state, params.th).await
+        }
+    }
+}
+
+/// Fallback to CRE workflow when pre-baked quote not available
+async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::response::Response {
     // Check capacity
     if state.pending_requests.len() >= state.config.max_pending {
         tracing::warn!(
@@ -124,8 +251,7 @@ pub async fn handle_create(
             .into_response();
     }
 
-    // Generate domain with cryptographically random component to prevent prediction attacks
-    // An attacker who can predict domains could pre-send forged webhooks
+    // Generate domain with cryptographically random component
     let random_id = match generate_request_id() {
         Ok(id) => id,
         Err(e) => {
@@ -137,7 +263,7 @@ pub async fn handle_create(
                 .into_response();
         }
     };
-    // Use 16 chars of randomness (2^64 space) to prevent birthday attack collisions
+
     let domain = format!(
         "req-{}-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
@@ -158,23 +284,20 @@ pub async fn handle_create(
     };
     state.pending_requests.insert(tracking_key.clone(), pending);
 
-    // Update pending requests gauge
     metrics::set_pending_requests(state.pending_requests.len());
 
     tracing::info!(
         domain = %domain,
-        threshold_price = params.th,
-        tracking_key = %tracking_key,
-        pending_count = state.pending_requests.len(),
-        "CREATE request initiated"
+        threshold_price = thold_price,
+        "CRE fallback: CREATE request initiated"
     );
 
     // Trigger CRE workflow
     if let Err(e) = trigger_workflow(
-        &state,
+        state,
         "create",
         &domain,
-        Some(params.th),
+        Some(thold_price),
         None,
         &state.config.callback_url,
     )
@@ -184,7 +307,6 @@ pub async fn handle_create(
         state.pending_requests.remove(&tracking_key);
         metrics::set_pending_requests(state.pending_requests.len());
         metrics::record_workflow_trigger("create", false);
-        // SECURITY: Don't expose internal error details to clients
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to trigger workflow"})),
@@ -202,16 +324,14 @@ pub async fn handle_create(
             tracing::info!(
                 domain = %domain,
                 event_id = %truncate_event_id(&payload.event_id),
-                "CREATE request completed"
+                "CRE CREATE request completed"
             );
 
-            // Update status
             if let Some(mut req) = state.pending_requests.get_mut(&tracking_key) {
                 req.status = RequestStatus::Completed;
                 req.result = Some(payload.clone());
             }
 
-            // Parse and return PriceContract
             match serde_json::from_str::<PriceContractResponse>(&payload.content) {
                 Ok(contract) => (StatusCode::OK, Json(serde_json::to_value(contract).unwrap()))
                     .into_response(),
@@ -223,13 +343,8 @@ pub async fn handle_create(
             }
         }
         _ => {
-            tracing::warn!(
-                domain = %domain,
-                request_id = %tracking_key,
-                "CREATE request timeout"
-            );
+            tracing::warn!(domain = %domain, "CRE CREATE request timeout");
 
-            // Update status
             if let Some(mut req) = state.pending_requests.get_mut(&tracking_key) {
                 req.status = RequestStatus::Timeout;
             }
@@ -1042,6 +1157,9 @@ mod tests {
             ip_burst_limit: 20,
             liquidation_url: "http://localhost/liq".to_string(),
             liquidation_interval: std::time::Duration::from_secs(90),
+            nostr_relay_url: "http://localhost:8080".to_string(),
+            oracle_pubkey: "6b5008a293291c14effeb0e8b7c56a80ecb5ca7b801768e17ec93092be6c0621".to_string(),
+            chain_network: "mutinynet".to_string(),
             liquidation_enabled: false,
         }
     }

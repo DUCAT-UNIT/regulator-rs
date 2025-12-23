@@ -1,8 +1,10 @@
+mod cache;
 mod config;
 mod crypto;
 mod handlers;
 mod metrics;
 mod middleware;
+mod nostr;
 mod types;
 
 use axum::{

@@ -26,6 +26,13 @@ pub struct GatewayConfig {
 
     // Private key (hex encoded)
     pub private_key_hex: String,
+
+    // Nostr relay
+    pub nostr_relay_url: String,
+
+    // Oracle identity (for local commit_hash calculation)
+    pub oracle_pubkey: String,
+    pub chain_network: String,
 }
 
 impl GatewayConfig {
@@ -109,6 +116,20 @@ impl GatewayConfig {
             .map(|s| s == "true" || s == "1")
             .unwrap_or(true);
 
+        let nostr_relay_url = std::env::var("NOSTR_RELAY_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+
+        let oracle_pubkey = std::env::var("ORACLE_PUBKEY")
+            .map_err(|_| anyhow!("ORACLE_PUBKEY environment variable not set"))?;
+
+        // Validate oracle pubkey is 64 hex chars (32 bytes)
+        if oracle_pubkey.len() != 64 || hex::decode(&oracle_pubkey).is_err() {
+            return Err(anyhow!("ORACLE_PUBKEY must be 64 hex characters"));
+        }
+
+        let chain_network = std::env::var("CHAIN_NETWORK")
+            .unwrap_or_else(|_| "mutinynet".to_string());
+
         Ok(Self {
             workflow_id,
             gateway_url,
@@ -124,6 +145,9 @@ impl GatewayConfig {
             liquidation_interval,
             liquidation_enabled,
             private_key_hex,
+            nostr_relay_url,
+            oracle_pubkey,
+            chain_network,
         })
     }
 }
@@ -140,6 +164,7 @@ mod tests {
         env::set_var("DUCAT_AUTHORIZED_KEY", "0x1234567890abcdef");
         env::set_var("GATEWAY_CALLBACK_URL", "http://localhost:8080/webhook");
         env::set_var("DUCAT_PRIVATE_KEY", "e0144cfbe97dcb2554ebf918b1ee12c1a51d4db1385aea75ec96d6632806bb2c");
+        env::set_var("ORACLE_PUBKEY", "6b5008a293291c14effeb0e8b7c56a80ecb5ca7b801768e17ec93092be6c0621");
         env::set_var("RUST_ENV", "test");
     }
 
@@ -158,6 +183,9 @@ mod tests {
         env::remove_var("LIQUIDATION_SERVICE_URL");
         env::remove_var("LIQUIDATION_INTERVAL_SECONDS");
         env::remove_var("LIQUIDATION_ENABLED");
+        env::remove_var("NOSTR_RELAY_URL");
+        env::remove_var("ORACLE_PUBKEY");
+        env::remove_var("CHAIN_NETWORK");
         env::remove_var("RUST_ENV");
     }
 
