@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // Build router with metrics middleware
     let app = Router::new()
         .route("/api/quote", get(handlers::handle_create))
+        .route("/api/price", get(handlers::handle_price))
         .route("/webhook/ducat", post(handlers::handle_webhook))
         .route("/health", get(handlers::handle_health))
         .route("/readiness", get(handlers::handle_readiness))
@@ -127,6 +128,8 @@ async fn metrics_middleware(request: Request, next: Next) -> Response {
     // Determine endpoint name for metrics
     let endpoint = if path.starts_with("/api/quote") {
         "create"
+    } else if path.starts_with("/api/price") {
+        "price"
     } else if path.starts_with("/webhook/ducat") {
         "webhook"
     } else if path.starts_with("/health") {

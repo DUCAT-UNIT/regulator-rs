@@ -171,17 +171,22 @@ pub async fn handle_create(
             "Quote found in local cache"
         );
 
-        let response = QuoteResponse {
-            chain_network: quote.chain_network,
-            oracle_pubkey: quote.oracle_pubkey,
-            base_price: quote.base_price,
-            base_stamp: quote.base_stamp,
-            commit_hash: quote.commit_hash,
-            contract_id: quote.contract_id,
-            oracle_sig: quote.oracle_sig,
+        let price_quote = PriceQuoteResponse {
+            quote_price: quote.base_price as f64,
+            quote_stamp: quote.base_stamp,
+            oracle_pk: quote.oracle_pubkey,
+            req_id: quote.commit_hash,
+            req_sig: quote.oracle_sig,
             thold_hash: quote.thold_hash,
+            thold_price: quote.thold_price as f64,
+            is_expired: quote.thold_key.is_some(),
+            eval_price: if quote.thold_key.is_some() { Some(quote.base_price as f64) } else { None },
+            eval_stamp: if quote.thold_key.is_some() { Some(quote.base_stamp) } else { None },
             thold_key: quote.thold_key,
-            thold_price: quote.thold_price,
+        };
+
+        let response = QuoteResponse {
+            quote: price_quote,
             collateral_ratio,
         };
 
@@ -205,17 +210,22 @@ pub async fn handle_create(
             // Cache for future requests
             state.quote_cache.store_quote(commit_hash.clone(), quote.clone());
 
-            let response = QuoteResponse {
-                chain_network: quote.chain_network,
-                oracle_pubkey: quote.oracle_pubkey,
-                base_price: quote.base_price,
-                base_stamp: quote.base_stamp,
-                commit_hash: quote.commit_hash,
-                contract_id: quote.contract_id,
-                oracle_sig: quote.oracle_sig,
+            let price_quote = PriceQuoteResponse {
+                quote_price: quote.base_price as f64,
+                quote_stamp: quote.base_stamp,
+                oracle_pk: quote.oracle_pubkey,
+                req_id: quote.commit_hash,
+                req_sig: quote.oracle_sig,
                 thold_hash: quote.thold_hash,
+                thold_price: quote.thold_price as f64,
+                is_expired: quote.thold_key.is_some(),
+                eval_price: if quote.thold_key.is_some() { Some(quote.base_price as f64) } else { None },
+                eval_stamp: if quote.thold_key.is_some() { Some(quote.base_stamp) } else { None },
                 thold_key: quote.thold_key,
-                thold_price: quote.thold_price,
+            };
+
+            let response = QuoteResponse {
+                quote: price_quote,
                 collateral_ratio,
             };
 
@@ -688,6 +698,26 @@ pub async fn handle_health(State(state): State<Arc<AppState>>) -> impl IntoRespo
     };
 
     (StatusCode::OK, Json(serde_json::to_value(response).unwrap()))
+}
+
+/// GET /api/price - Return the latest cached price from oracle
+pub async fn handle_price(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.quote_cache.get_price() {
+        Some(cached) => {
+            let response = serde_json::json!({
+                "USD": cached.base_price as f64,
+                "time": cached.base_stamp
+            });
+            (StatusCode::OK, Json(response))
+        }
+        None => {
+            let response = serde_json::json!({
+                "error": "no price available",
+                "message": "price data is stale or not yet received"
+            });
+            (StatusCode::SERVICE_UNAVAILABLE, Json(response))
+        }
+    }
 }
 
 /// GET /readiness - Readiness probe
