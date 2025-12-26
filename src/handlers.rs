@@ -171,19 +171,7 @@ pub async fn handle_create(
             "Quote found in local cache"
         );
 
-        let price_quote = PriceQuoteResponse {
-            quote_price: quote.base_price as f64,
-            quote_stamp: quote.base_stamp,
-            oracle_pk: quote.oracle_pubkey,
-            req_id: quote.commit_hash,
-            req_sig: quote.oracle_sig,
-            thold_hash: quote.thold_hash,
-            thold_price: quote.thold_price as f64,
-            is_expired: quote.thold_key.is_some(),
-            eval_price: if quote.thold_key.is_some() { Some(quote.base_price as f64) } else { None },
-            eval_stamp: if quote.thold_key.is_some() { Some(quote.base_stamp) } else { None },
-            thold_key: quote.thold_key,
-        };
+        let price_quote = quote.to_v25_quote();
 
         let response = QuoteResponse {
             quote: price_quote,
@@ -210,19 +198,7 @@ pub async fn handle_create(
             // Cache for future requests
             state.quote_cache.store_quote(commit_hash.clone(), quote.clone());
 
-            let price_quote = PriceQuoteResponse {
-                quote_price: quote.base_price as f64,
-                quote_stamp: quote.base_stamp,
-                oracle_pk: quote.oracle_pubkey,
-                req_id: quote.commit_hash,
-                req_sig: quote.oracle_sig,
-                thold_hash: quote.thold_hash,
-                thold_price: quote.thold_price as f64,
-                is_expired: quote.thold_key.is_some(),
-                eval_price: if quote.thold_key.is_some() { Some(quote.base_price as f64) } else { None },
-                eval_stamp: if quote.thold_key.is_some() { Some(quote.base_stamp) } else { None },
-                thold_key: quote.thold_key,
-            };
+            let price_quote = quote.to_v25_quote();
 
             let response = QuoteResponse {
                 quote: price_quote,

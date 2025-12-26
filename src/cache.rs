@@ -32,6 +32,40 @@ pub struct CachedQuote {
     pub cached_at: i64,
 }
 
+impl CachedQuote {
+    /// Convert to v2.5 client-sdk format
+    pub fn to_v25_quote(&self) -> crate::types::PriceQuoteResponse {
+        let is_expired = self.thold_key.is_some();
+        let origin = "cre".to_string();
+        crate::types::PriceQuoteResponse {
+            // Server identity
+            srv_network: self.chain_network.clone(),
+            srv_pubkey: self.oracle_pubkey.clone(),
+            // Quote price
+            quote_origin: origin.clone(),
+            quote_price: self.base_price as f64,
+            quote_stamp: self.base_stamp,
+            // Latest price (same as quote for cached responses)
+            latest_origin: origin.clone(),
+            latest_price: self.base_price as f64,
+            latest_stamp: self.base_stamp,
+            // Event price
+            event_origin: if is_expired { Some(origin) } else { None },
+            event_price: if is_expired { Some(self.base_price as f64) } else { None },
+            event_stamp: if is_expired { Some(self.base_stamp) } else { None },
+            event_type: if is_expired { "breach".to_string() } else { "active".to_string() },
+            // Threshold commitment
+            thold_hash: self.thold_hash.clone(),
+            thold_key: self.thold_key.clone(),
+            thold_price: self.thold_price as f64,
+            // State & signatures
+            is_expired,
+            req_id: self.commit_hash.clone(),
+            req_sig: self.oracle_sig.clone(),
+        }
+    }
+}
+
 /// Price and quote cache
 pub struct QuoteCache {
     /// Latest price observation

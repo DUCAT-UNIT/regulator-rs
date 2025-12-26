@@ -36,20 +36,39 @@ pub struct WebhookPayload {
 /// NOTE: Prices are f64 to match cre-hmac which uses float64 for HMAC computation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceQuoteResponse {
-    pub quote_price: f64,
-    pub quote_stamp: i64,
-    pub oracle_pk: String,
-    pub req_id: String,
-    pub req_sig: String,
+    // Server identity
+    pub srv_network: String,   // "main" | "test"
+    pub srv_pubkey: String,    // Oracle public key (hex)
+
+    // Quote price (at commitment creation)
+    pub quote_origin: String,  // "link" | "nostr" | "cre"
+    pub quote_price: f64,      // BTC/USD price
+    pub quote_stamp: i64,      // Unix timestamp
+
+    // Latest price (most recent observation)
+    pub latest_origin: String,
+    pub latest_price: f64,
+    pub latest_stamp: i64,
+
+    // Event price (at breach, if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_stamp: Option<i64>,
+    pub event_type: String,    // "active" | "breach"
+
+    // Threshold commitment
     pub thold_hash: String,
-    pub thold_price: f64,
-    pub is_expired: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub eval_price: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub eval_stamp: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thold_key: Option<String>,
+    pub thold_price: f64,
+
+    // State & signatures
+    pub is_expired: bool,
+    pub req_id: String,
+    pub req_sig: String,
 }
 
 /// Legacy price contract response for internal CRE communication
@@ -72,18 +91,32 @@ impl PriceContractResponse {
     /// Convert internal format to v2.5 client-sdk format
     pub fn to_v25_quote(&self) -> PriceQuoteResponse {
         let is_expired = self.thold_key.is_some();
+        let origin = "cre".to_string();
         PriceQuoteResponse {
+            // Server identity
+            srv_network: self.chain_network.clone(),
+            srv_pubkey: self.oracle_pubkey.clone(),
+            // Quote price
+            quote_origin: origin.clone(),
             quote_price: self.base_price,
             quote_stamp: self.base_stamp,
-            oracle_pk: self.oracle_pubkey.clone(),
+            // Latest price (same as quote for CRE responses)
+            latest_origin: origin.clone(),
+            latest_price: self.base_price,
+            latest_stamp: self.base_stamp,
+            // Event price
+            event_origin: if is_expired { Some(origin) } else { None },
+            event_price: if is_expired { Some(self.base_price) } else { None },
+            event_stamp: if is_expired { Some(self.base_stamp) } else { None },
+            event_type: if is_expired { "breach".to_string() } else { "active".to_string() },
+            // Threshold commitment
+            thold_hash: self.thold_hash.clone(),
+            thold_key: self.thold_key.clone(),
+            thold_price: self.thold_price,
+            // State & signatures
+            is_expired,
             req_id: self.commit_hash.clone(),
             req_sig: self.oracle_sig.clone(),
-            thold_hash: self.thold_hash.clone(),
-            thold_price: self.thold_price,
-            is_expired,
-            eval_price: if is_expired { Some(self.base_price) } else { None },
-            eval_stamp: if is_expired { Some(self.base_stamp) } else { None },
-            thold_key: self.thold_key.clone(),
         }
     }
 }
