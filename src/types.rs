@@ -32,7 +32,7 @@ pub struct WebhookPayload {
     pub nostr_event: Option<serde_json::Value>,
 }
 
-/// PriceQuote matches Rust protocol-sdk v3 schema (ducat-protocol/src/oracle.rs)
+/// PriceQuote matches cre-hmac v3 PriceEvent schema
 /// NOTE: Prices are f64 to match cre-hmac which uses float64 for HMAC computation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceQuote {
@@ -50,15 +50,14 @@ pub struct PriceQuote {
     pub latest_price: f64,
     pub latest_stamp: i64,
 
-    // Event/breach data (optional)
+    // Event/breach data (optional - null if not breached)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_stamp: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_type: Option<String>,
+    pub event_type: String, // "active" or "breach" - always present
 
     // Threshold commitment
     pub thold_hash: String,
@@ -68,10 +67,8 @@ pub struct PriceQuote {
     pub is_expired: bool,
 
     // Request identification
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub req_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub req_sig: Option<String>,
+    pub req_id: String,
+    pub req_sig: String,
 }
 
 /// Price contract response - internal CRE format
@@ -106,13 +103,13 @@ impl PriceContractResponse {
             event_origin: if is_expired { Some("cre".to_string()) } else { None },
             event_price: if is_expired { Some(self.base_price) } else { None },
             event_stamp: if is_expired { Some(self.base_stamp) } else { None },
-            event_type: if is_expired { Some("breach".to_string()) } else { None },
+            event_type: if is_expired { "breach".to_string() } else { "active".to_string() },
             thold_hash: self.thold_hash.clone(),
             thold_price: self.thold_price,
             thold_key: self.thold_key.clone(),
             is_expired,
-            req_id: Some(self.commit_hash.clone()),
-            req_sig: Some(self.oracle_sig.clone()),
+            req_id: self.commit_hash.clone(),
+            req_sig: self.oracle_sig.clone(),
         }
     }
 }
