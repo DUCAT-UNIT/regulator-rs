@@ -50,21 +50,39 @@ The Regulator is the **orchestrator** - it runs the cron jobs that drive the liq
 | `GET /readiness` | GET | Readiness probe | Kubernetes |
 | `GET /metrics` | GET | Prometheus metrics | Prometheus |
 
-### Type Schema (v2.5)
+### Type Schema (v2.5 PriceQuote)
 
 ```rust
-pub struct PriceQuoteResponse {
-    pub quote_price: f64,           // BTC/USD at quote creation
+pub struct PriceQuote {
+    // Server identity
+    pub srv_network: String,        // "main" | "test"
+    pub srv_pubkey: String,         // Oracle public key (hex)
+
+    // Quote price (at commitment creation)
+    pub quote_origin: String,       // "link" | "nostr" | "cre"
+    pub quote_price: f64,           // BTC/USD price
     pub quote_stamp: i64,           // Unix timestamp
-    pub oracle_pk: String,          // Oracle public key (hex)
+
+    // Latest price (most recent observation)
+    pub latest_origin: String,
+    pub latest_price: f64,
+    pub latest_stamp: i64,
+
+    // Event price (at breach, if any)
+    pub event_origin: Option<String>,
+    pub event_price: Option<f64>,
+    pub event_stamp: Option<i64>,
+    pub event_type: String,         // "active" | "breach"
+
+    // Threshold commitment
+    pub thold_hash: String,         // Hash160 (20 bytes hex)
+    pub thold_key: Option<String>,  // Revealed on breach
+    pub thold_price: f64,
+
+    // State & signatures
+    pub is_expired: bool,
     pub req_id: String,             // Request ID hash
     pub req_sig: String,            // Schnorr signature
-    pub thold_hash: String,         // Hash160 commitment (20 bytes hex)
-    pub thold_price: f64,           // Threshold price
-    pub is_expired: bool,           // True if breached
-    pub eval_price: Option<f64>,    // Price at breach (None if active)
-    pub eval_stamp: Option<i64>,    // Timestamp at breach (None if active)
-    pub thold_key: Option<String>,  // Secret key (None until breached)
 }
 ```
 
