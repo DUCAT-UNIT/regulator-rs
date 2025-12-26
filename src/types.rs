@@ -33,18 +33,19 @@ pub struct WebhookPayload {
 }
 
 /// v2.5 Price quote response matching client-sdk main branch schema
+/// NOTE: Prices are f64 to match cre-hmac which uses float64 for HMAC computation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceQuoteResponse {
-    pub quote_price: i64,
+    pub quote_price: f64,
     pub quote_stamp: i64,
     pub oracle_pk: String,
     pub req_id: String,
     pub req_sig: String,
     pub thold_hash: String,
-    pub thold_price: i64,
+    pub thold_price: f64,
     pub is_expired: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eval_price: Option<i64>,
+    pub eval_price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_stamp: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,7 +57,7 @@ pub struct PriceQuoteResponse {
 pub struct PriceContractResponse {
     pub chain_network: String,
     pub oracle_pubkey: String,
-    pub base_price: i64,
+    pub base_price: f64,
     pub base_stamp: i64,
     pub commit_hash: String,
     pub contract_id: String,
@@ -64,7 +65,7 @@ pub struct PriceContractResponse {
     pub thold_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thold_key: Option<String>,
-    pub thold_price: i64,
+    pub thold_price: f64,
 }
 
 impl PriceContractResponse {
