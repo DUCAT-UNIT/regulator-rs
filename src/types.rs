@@ -33,6 +33,7 @@ pub struct WebhookPayload {
 }
 
 /// PriceQuote matches Rust protocol-sdk v3 schema (ducat-protocol/src/oracle.rs)
+/// NOTE: Prices are f64 to match cre-hmac which uses float64 for HMAC computation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceQuote {
     // Server identity
@@ -41,19 +42,19 @@ pub struct PriceQuote {
 
     // Quote creation data
     pub quote_origin: String,
-    pub quote_price: i64,
+    pub quote_price: f64,
     pub quote_stamp: i64,
 
     // Latest price data
     pub latest_origin: String,
-    pub latest_price: i64,
+    pub latest_price: f64,
     pub latest_stamp: i64,
 
     // Event/breach data (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_price: Option<i64>,
+    pub event_price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_stamp: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,7 +62,7 @@ pub struct PriceQuote {
 
     // Threshold commitment
     pub thold_hash: String,
-    pub thold_price: i64,
+    pub thold_price: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thold_key: Option<String>,
     pub is_expired: bool,
@@ -78,7 +79,7 @@ pub struct PriceQuote {
 pub struct PriceContractResponse {
     pub chain_network: String,
     pub oracle_pubkey: String,
-    pub base_price: i64,
+    pub base_price: f64,
     pub base_stamp: i64,
     pub commit_hash: String,
     pub contract_id: String,
@@ -86,7 +87,7 @@ pub struct PriceContractResponse {
     pub thold_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thold_key: Option<String>,
-    pub thold_price: i64,
+    pub thold_price: f64,
 }
 
 impl PriceContractResponse {
@@ -300,14 +301,14 @@ mod tests {
         let response = PriceContractResponse {
             chain_network: "mutiny".to_string(),
             oracle_pubkey: "pubkey".to_string(),
-            base_price: 100000,
+            base_price: 100000.0,
             base_stamp: 1700000000,
             commit_hash: "commit".to_string(),
             contract_id: "contract".to_string(),
             oracle_sig: "sig".to_string(),
             thold_hash: "thold".to_string(),
             thold_key: None,
-            thold_price: 95000,
+            thold_price: 95000.0,
         };
 
         let json = serde_json::to_string(&response).expect("should serialize");
