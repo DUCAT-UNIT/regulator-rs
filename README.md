@@ -9,6 +9,66 @@ Rust implementation of the DUCAT Gateway with:
 - **Memory Safety**: Zero-cost abstractions with compile-time guarantees
 - **Concurrent State**: Lock-free data structures with DashMap
 
+## System Integration
+
+The Regulator is the **orchestrator** - it runs the cron jobs that drive the liquidation system.
+
+### Role in System
+
+```
+┌─────────────┐                      ┌─────────────┐
+│   Client    │ ◄──────────────────► │  Regulator  │
+│   (SDK)     │    REST API          │  (Gateway)  │
+└─────────────┘                      └──────┬──────┘
+                                            │
+                    ┌───────────────────────┼───────────────────────┐
+                    │                       │                       │
+                    ▼                       ▼                       ▼
+            ┌─────────────┐         ┌─────────────┐         ┌─────────────┐
+            │     CRE     │         │ Nostr Relay │         │   Indexer   │
+            │   (WASM)    │         │             │         │ (at-risk)   │
+            └─────────────┘         └─────────────┘         └─────────────┘
+```
+
+### Background Jobs
+
+| Job | Frequency | Action |
+|-----|-----------|--------|
+| **Liquidation Poller** | Every 90s | Poll indexer `/at-risk`, trigger CRE CHECK for each |
+| **Cleanup Job** | Every 2min | Remove stale pending requests |
+
+### Endpoints
+
+| Endpoint | Method | Purpose | Called By |
+|----------|--------|---------|-----------|
+| `GET /api/quote?th=PRICE` | GET | Create threshold commitment | Client SDK |
+| `POST /webhook/ducat` | POST | Receive CRE callback | CRE |
+| `POST /check` | POST | Check if threshold breached | Internal (liquidation) |
+| `GET /status/:id` | GET | Poll async request status | Client SDK |
+| `GET /health` | GET | Liveness probe | Kubernetes |
+| `GET /readiness` | GET | Readiness probe | Kubernetes |
+| `GET /metrics` | GET | Prometheus metrics | Prometheus |
+
+### Type Schema (v2.5)
+
+```rust
+pub struct PriceQuoteResponse {
+    pub quote_price: f64,           // BTC/USD at quote creation
+    pub quote_stamp: i64,           // Unix timestamp
+    pub oracle_pk: String,          // Oracle public key (hex)
+    pub req_id: String,             // Request ID hash
+    pub req_sig: String,            // Schnorr signature
+    pub thold_hash: String,         // Hash160 commitment (20 bytes hex)
+    pub thold_price: f64,           // Threshold price
+    pub is_expired: bool,           // True if breached
+    pub eval_price: Option<f64>,    // Price at breach (None if active)
+    pub eval_stamp: Option<i64>,    // Timestamp at breach (None if active)
+    pub thold_key: Option<String>,  // Secret key (None until breached)
+}
+```
+
+**Note**: All prices are `f64` to match cre-hmac HMAC computation.
+
 ## Security Features
 
 - **BIP-340 Schnorr Signature Verification**: Uses `secp256k1` crate
