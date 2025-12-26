@@ -32,52 +32,19 @@ pub struct WebhookPayload {
     pub nostr_event: Option<serde_json::Value>,
 }
 
-/// PriceQuote matches cre-hmac v3 PriceEvent schema
-/// NOTE: Prices are f64 to match cre-hmac which uses float64 for HMAC computation
+/// PriceContract is the v3 schema (extends PriceObservation extends PriceOracleConfig)
+/// This is the only response format for the v3 branch API
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PriceQuote {
-    // Server identity
-    pub srv_network: String,
-    pub srv_pubkey: String,
-
-    // Quote creation data
-    pub quote_origin: String,
-    pub quote_price: f64,
-    pub quote_stamp: i64,
-
-    // Latest price data
-    pub latest_origin: String,
-    pub latest_price: f64,
-    pub latest_stamp: i64,
-
-    // Event/breach data (optional - null if not breached)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_origin: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_price: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_stamp: Option<i64>,
-    pub event_type: String, // "active" or "breach" - always present
-
-    // Threshold commitment
-    pub thold_hash: String,
-    pub thold_price: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thold_key: Option<String>,
-    pub is_expired: bool,
-
-    // Request identification
-    pub req_id: String,
-    pub req_sig: String,
-}
-
-/// Price contract response - internal CRE format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PriceContractResponse {
+pub struct PriceContract {
+    // PriceOracleConfig
     pub chain_network: String,
     pub oracle_pubkey: String,
+
+    // PriceObservation
     pub base_price: f64,
     pub base_stamp: i64,
+
+    // PriceContract specific
     pub commit_hash: String,
     pub contract_id: String,
     pub oracle_sig: String,
@@ -87,38 +54,11 @@ pub struct PriceContractResponse {
     pub thold_price: f64,
 }
 
-impl PriceContractResponse {
-    /// Convert internal CRE format to v3 protocol-sdk format
-    pub fn to_v3_quote(&self) -> PriceQuote {
-        let is_expired = self.thold_key.is_some();
-        PriceQuote {
-            srv_network: self.chain_network.clone(),
-            srv_pubkey: self.oracle_pubkey.clone(),
-            quote_origin: "cre".to_string(),
-            quote_price: self.base_price,
-            quote_stamp: self.base_stamp,
-            latest_origin: "cre".to_string(),
-            latest_price: self.base_price,
-            latest_stamp: self.base_stamp,
-            event_origin: if is_expired { Some("cre".to_string()) } else { None },
-            event_price: if is_expired { Some(self.base_price) } else { None },
-            event_stamp: if is_expired { Some(self.base_stamp) } else { None },
-            event_type: if is_expired { "breach".to_string() } else { "active".to_string() },
-            thold_hash: self.thold_hash.clone(),
-            thold_price: self.thold_price,
-            thold_key: self.thold_key.clone(),
-            is_expired,
-            req_id: self.commit_hash.clone(),
-            req_sig: self.oracle_sig.clone(),
-        }
-    }
-}
-
 /// Quote response with collateral ratio - v3 format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteResponse {
     #[serde(flatten)]
-    pub quote: PriceQuote,
+    pub contract: PriceContract,
     /// Collateral ratio as percentage (e.g., 135.0 for 135%)
     pub collateral_ratio: f64,
 }
@@ -294,8 +234,8 @@ mod tests {
     }
 
     #[test]
-    fn test_price_contract_response_serialization() {
-        let response = PriceContractResponse {
+    fn test_price_contract_serialization() {
+        let contract = PriceContract {
             chain_network: "mutiny".to_string(),
             oracle_pubkey: "pubkey".to_string(),
             base_price: 100000.0,
@@ -308,13 +248,13 @@ mod tests {
             thold_price: 95000.0,
         };
 
-        let json = serde_json::to_string(&response).expect("should serialize");
+        let json = serde_json::to_string(&contract).expect("should serialize");
         assert!(json.contains("mutiny"));
         assert!(!json.contains("thold_key")); // Should be skipped when None
 
-        let with_key = PriceContractResponse {
+        let with_key = PriceContract {
             thold_key: Some("secret".to_string()),
-            ..response
+            ..contract
         };
         let json_with_key = serde_json::to_string(&with_key).expect("should serialize");
         assert!(json_with_key.contains("thold_key"));

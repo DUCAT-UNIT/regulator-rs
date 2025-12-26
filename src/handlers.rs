@@ -171,17 +171,20 @@ pub async fn handle_create(
             "Quote found in local cache"
         );
 
-        let response = QuoteResponse {
+        let contract = PriceContract {
             chain_network: quote.chain_network,
             oracle_pubkey: quote.oracle_pubkey,
-            base_price: quote.base_price,
+            base_price: quote.base_price as f64,
             base_stamp: quote.base_stamp,
             commit_hash: quote.commit_hash,
             contract_id: quote.contract_id,
             oracle_sig: quote.oracle_sig,
             thold_hash: quote.thold_hash,
             thold_key: quote.thold_key,
-            thold_price: quote.thold_price,
+            thold_price: quote.thold_price as f64,
+        };
+        let response = QuoteResponse {
+            contract,
             collateral_ratio,
         };
 
@@ -205,17 +208,20 @@ pub async fn handle_create(
             // Cache for future requests
             state.quote_cache.store_quote(commit_hash.clone(), quote.clone());
 
-            let response = QuoteResponse {
+            let contract = PriceContract {
                 chain_network: quote.chain_network,
                 oracle_pubkey: quote.oracle_pubkey,
-                base_price: quote.base_price,
+                base_price: quote.base_price as f64,
                 base_stamp: quote.base_stamp,
                 commit_hash: quote.commit_hash,
                 contract_id: quote.contract_id,
                 oracle_sig: quote.oracle_sig,
                 thold_hash: quote.thold_hash,
                 thold_key: quote.thold_key,
-                thold_price: quote.thold_price,
+                thold_price: quote.thold_price as f64,
+            };
+            let response = QuoteResponse {
+                contract,
                 collateral_ratio,
             };
 
@@ -332,7 +338,7 @@ async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::respo
                 req.result = Some(payload.clone());
             }
 
-            match serde_json::from_str::<PriceContractResponse>(&payload.content) {
+            match serde_json::from_str::<PriceContract>(&payload.content) {
                 Ok(contract) => (StatusCode::OK, Json(serde_json::to_value(contract).unwrap()))
                     .into_response(),
                 Err(_) => (
@@ -589,7 +595,7 @@ pub async fn handle_check(
                 pending.result = Some(payload.clone());
             }
 
-            match serde_json::from_str::<PriceContractResponse>(&payload.content) {
+            match serde_json::from_str::<PriceContract>(&payload.content) {
                 Ok(contract) => (StatusCode::OK, Json(serde_json::to_value(contract).unwrap()))
                     .into_response(),
                 Err(_) => (
@@ -641,7 +647,7 @@ pub async fn handle_status(
             if pending.status == RequestStatus::Completed {
                 if let Some(ref result) = pending.result {
                     if let Ok(contract) =
-                        serde_json::from_str::<PriceContractResponse>(&result.content)
+                        serde_json::from_str::<PriceContract>(&result.content)
                     {
                         return (StatusCode::OK, Json(serde_json::to_value(contract).unwrap()));
                     }
