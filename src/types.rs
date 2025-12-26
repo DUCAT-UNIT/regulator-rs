@@ -32,7 +32,48 @@ pub struct WebhookPayload {
     pub nostr_event: Option<serde_json::Value>,
 }
 
-/// Price contract response matching core-ts schema
+/// PriceQuote matches Rust protocol-sdk v3 schema (ducat-protocol/src/oracle.rs)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceQuote {
+    // Server identity
+    pub srv_network: String,
+    pub srv_pubkey: String,
+
+    // Quote creation data
+    pub quote_origin: String,
+    pub quote_price: i64,
+    pub quote_stamp: i64,
+
+    // Latest price data
+    pub latest_origin: String,
+    pub latest_price: i64,
+    pub latest_stamp: i64,
+
+    // Event/breach data (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_price: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_stamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+
+    // Threshold commitment
+    pub thold_hash: String,
+    pub thold_price: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thold_key: Option<String>,
+    pub is_expired: bool,
+
+    // Request identification
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub req_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub req_sig: Option<String>,
+}
+
+/// Price contract response - internal CRE format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceContractResponse {
     pub chain_network: String,
@@ -48,20 +89,38 @@ pub struct PriceContractResponse {
     pub thold_price: i64,
 }
 
-/// Quote response with collateral ratio (returned to frontend)
+impl PriceContractResponse {
+    /// Convert internal CRE format to v3 protocol-sdk format
+    pub fn to_v3_quote(&self) -> PriceQuote {
+        let is_expired = self.thold_key.is_some();
+        PriceQuote {
+            srv_network: self.chain_network.clone(),
+            srv_pubkey: self.oracle_pubkey.clone(),
+            quote_origin: "cre".to_string(),
+            quote_price: self.base_price,
+            quote_stamp: self.base_stamp,
+            latest_origin: "cre".to_string(),
+            latest_price: self.base_price,
+            latest_stamp: self.base_stamp,
+            event_origin: if is_expired { Some("cre".to_string()) } else { None },
+            event_price: if is_expired { Some(self.base_price) } else { None },
+            event_stamp: if is_expired { Some(self.base_stamp) } else { None },
+            event_type: if is_expired { Some("breach".to_string()) } else { None },
+            thold_hash: self.thold_hash.clone(),
+            thold_price: self.thold_price,
+            thold_key: self.thold_key.clone(),
+            is_expired,
+            req_id: Some(self.commit_hash.clone()),
+            req_sig: Some(self.oracle_sig.clone()),
+        }
+    }
+}
+
+/// Quote response with collateral ratio - v3 format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteResponse {
-    pub chain_network: String,
-    pub oracle_pubkey: String,
-    pub base_price: i64,
-    pub base_stamp: i64,
-    pub commit_hash: String,
-    pub contract_id: String,
-    pub oracle_sig: String,
-    pub thold_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thold_key: Option<String>,
-    pub thold_price: i64,
+    #[serde(flatten)]
+    pub quote: PriceQuote,
     /// Collateral ratio as percentage (e.g., 135.0 for 135%)
     pub collateral_ratio: f64,
 }
