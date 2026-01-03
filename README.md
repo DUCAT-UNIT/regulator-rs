@@ -88,6 +88,35 @@ pub struct PriceQuote {
 
 **Note**: All prices are `f64` to match cre-hmac HMAC computation.
 
+## CRE Integration
+
+### Request Size Limits
+
+CRE has a **30KB maximum request size** (including headers and body). The gateway automatically batches large liquidation requests:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Batch Size | 500 vaults | ~22KB per batch (safely under 30KB) |
+| Batch Delay | 10 seconds | Avoid CRE rate limits (429 errors) |
+
+### Batch Processing
+
+When the liquidation poller detects at-risk vaults:
+
+1. Vaults are split into batches of 500
+2. Each batch triggers a separate CRE `evaluate` workflow
+3. 10-second delay between batches prevents rate limiting
+4. Success/failure logged per batch with running totals
+
+### Circuit Breaker
+
+The Rust implementation includes a circuit breaker to prevent cascading failures:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Failure Threshold | 5 | Consecutive failures before opening |
+| Recovery Timeout | 30 seconds | Time before attempting recovery |
+
 ## Security Features
 
 - **BIP-340 Schnorr Signature Verification**: Uses `secp256k1` crate
