@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use subtle::ConstantTimeEq;
 
 use crate::metrics;
+use crate::middleware::CircuitBreaker;
 
 /// Webhook replay protection cache TTL (5 minutes)
 const WEBHOOK_CACHE_TTL_SECS: i64 = 300;
@@ -52,6 +53,8 @@ pub struct AppState {
     pub quote_cache: QuoteCache,
     /// Nostr relay client
     pub nostr_client: NostrClient,
+    /// Circuit breaker for CRE gateway
+    pub circuit_breaker: CircuitBreaker,
 }
 
 impl AppState {
@@ -67,6 +70,8 @@ impl AppState {
             quote_cache: QuoteCache::new(1000), // Cache up to 1000 quotes
             nostr_client,
             config,
+            // Circuit breaker: open after 5 failures, reset after 30 seconds
+            circuit_breaker: CircuitBreaker::new(5, std::time::Duration::from_secs(30)),
         })
     }
 
@@ -223,6 +228,19 @@ pub async fn handle_create(
 
 /// Fallback to CRE workflow when pre-baked quote not available
 async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::response::Response {
+    // Check circuit breaker
+    if !state.circuit_breaker.allow() {
+        tracing::warn!(
+            circuit_state = %state.circuit_breaker.state_str(),
+            "Circuit breaker open, rejecting request"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Service temporarily unavailable"})),
+        )
+            .into_response();
+    }
+
     // Check capacity
     if state.pending_requests.len() >= state.config.max_pending {
         tracing::warn!(
@@ -293,6 +311,7 @@ async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::respo
         state.pending_requests.remove(&tracking_key);
         metrics::set_pending_requests(state.pending_requests.len());
         metrics::record_workflow_trigger("create", false);
+        state.circuit_breaker.record_failure();
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to trigger workflow"})),
@@ -313,6 +332,8 @@ async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::respo
                 "CRE CREATE request completed"
             );
 
+            state.circuit_breaker.record_success();
+
             if let Some(mut req) = state.pending_requests.get_mut(&tracking_key) {
                 req.status = RequestStatus::Completed;
                 req.result = Some(payload.clone());
@@ -330,6 +351,8 @@ async fn fallback_to_cre(state: &Arc<AppState>, thold_price: f64) -> axum::respo
         }
         _ => {
             tracing::warn!(domain = %domain, "CRE CREATE request timeout");
+
+            state.circuit_breaker.record_failure();
 
             if let Some(mut req) = state.pending_requests.get_mut(&tracking_key) {
                 req.status = RequestStatus::Timeout;
@@ -490,6 +513,19 @@ pub async fn handle_check(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CheckRequest>,
 ) -> impl IntoResponse {
+    // Check circuit breaker
+    if !state.circuit_breaker.allow() {
+        tracing::warn!(
+            circuit_state = %state.circuit_breaker.state_str(),
+            "Circuit breaker open, rejecting request"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Service temporarily unavailable"})),
+        )
+            .into_response();
+    }
+
     // Validate request - domain must be non-empty and not too long, thold_hash must be exactly 40 hex chars
     // Max domain length is 253 per DNS spec limit
     const MAX_DOMAIN_LENGTH: usize = 253;
@@ -549,6 +585,7 @@ pub async fn handle_check(
         state.pending_requests.remove(&tracking_key);
         metrics::set_pending_requests(state.pending_requests.len());
         metrics::record_workflow_trigger("check", false);
+        state.circuit_breaker.record_failure();
         // SECURITY: Don't expose internal error details to clients
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -570,6 +607,8 @@ pub async fn handle_check(
                 tracing::info!(domain = %req.domain, status = %payload.event_type, "CHECK completed");
             }
 
+            state.circuit_breaker.record_success();
+
             if let Some(mut pending) = state.pending_requests.get_mut(&tracking_key) {
                 pending.status = RequestStatus::Completed;
                 pending.result = Some(payload.clone());
@@ -587,6 +626,8 @@ pub async fn handle_check(
         }
         _ => {
             tracing::warn!(domain = %req.domain, "CHECK request timeout");
+
+            state.circuit_breaker.record_failure();
 
             if let Some(mut pending) = state.pending_requests.get_mut(&tracking_key) {
                 pending.status = RequestStatus::Timeout;
@@ -1032,13 +1073,90 @@ pub async fn poll_liquidation_service(state: Arc<AppState>) {
     }
 }
 
-/// Trigger batch evaluate workflow
+/// CRE has a 30KB maximum request size limit (including headers and body).
+/// Each thold_hash is ~45 bytes (40 hex chars + JSON overhead).
+/// With JSON-RPC wrapper overhead (~500 bytes), we can fit ~650 vaults max.
+/// Using 500 per batch for safety margin.
+const CRE_BATCH_SIZE: usize = 500;
+
+/// Delay between batches to avoid CRE rate limits (429 errors observed at 500ms)
+const CRE_BATCH_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Trigger batch evaluate workflow with batching to respect CRE 30KB limit
 async fn trigger_batch_evaluate(state: &AppState, thold_hashes: Vec<String>) -> anyhow::Result<()> {
-    let domain = format!(
-        "liq-batch-{}",
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    if thold_hashes.is_empty() {
+        return Ok(());
+    }
+
+    let total_vaults = thold_hashes.len();
+    let num_batches = (total_vaults + CRE_BATCH_SIZE - 1) / CRE_BATCH_SIZE;
+
+    tracing::info!(
+        total_vaults = total_vaults,
+        batch_size = CRE_BATCH_SIZE,
+        num_batches = num_batches,
+        "Triggering CRE evaluate for at-risk vaults"
     );
 
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    for (batch_idx, chunk) in thold_hashes.chunks(CRE_BATCH_SIZE).enumerate() {
+        let batch_num = batch_idx + 1;
+        let batch: Vec<String> = chunk.to_vec();
+
+        // Generate a unique domain for this batch
+        let domain = format!(
+            "liq-{}-b{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            batch_num
+        );
+
+        match trigger_single_batch_evaluate(state, &domain, batch.clone()).await {
+            Ok(()) => {
+                tracing::info!(
+                    batch = batch_num,
+                    batch_size = batch.len(),
+                    total_batches = num_batches,
+                    domain = %domain,
+                    "Triggered evaluate workflow batch"
+                );
+                success_count += 1;
+            }
+            Err(e) => {
+                tracing::error!(
+                    batch = batch_num,
+                    batch_size = batch.len(),
+                    total_batches = num_batches,
+                    error = %e,
+                    "Failed to trigger evaluate workflow batch"
+                );
+                error_count += 1;
+            }
+        }
+
+        // Delay between batches to avoid CRE rate limits
+        if batch_idx + 1 < num_batches {
+            tokio::time::sleep(CRE_BATCH_DELAY).await;
+        }
+    }
+
+    tracing::info!(
+        successful_batches = success_count,
+        failed_batches = error_count,
+        total_vaults = total_vaults,
+        "Completed triggering evaluate workflow batches"
+    );
+
+    Ok(())
+}
+
+/// Trigger a single batch evaluate workflow
+async fn trigger_single_batch_evaluate(
+    state: &AppState,
+    domain: &str,
+    thold_hashes: Vec<String>,
+) -> anyhow::Result<()> {
     let input = serde_json::json!({
         "domain": domain,
         "thold_hashes": thold_hashes,
@@ -1080,14 +1198,8 @@ async fn trigger_batch_evaluate(state: &AppState, thold_hashes: Vec<String>) -> 
 
     if !response.status().is_success() {
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("non-success status: {}", body);
+        anyhow::bail!("non-success status {}: {}", response.status(), body);
     }
-
-    tracing::info!(
-        batch_size = thold_hashes.len(),
-        domain = %domain,
-        "Triggered batch evaluate workflow"
-    );
 
     Ok(())
 }
