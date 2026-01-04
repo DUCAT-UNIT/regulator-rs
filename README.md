@@ -117,6 +117,14 @@ The Rust implementation includes a circuit breaker to prevent cascading failures
 | Failure Threshold | 5 | Consecutive failures before opening |
 | Recovery Timeout | 30 seconds | Time before attempting recovery |
 
+### Quote Cache Invalidation
+
+Quotes are cached in memory but **invalidated when the price changes**, not by TTL. This ensures quotes are only valid for the price at which they were created:
+
+- When a webhook arrives with a new price, all cached quotes are cleared
+- CRE cron sends price updates every ~90 seconds
+- Same price = cache preserved, different price = cache cleared
+
 ## Security Features
 
 - **BIP-340 Schnorr Signature Verification**: Uses `secp256k1` crate
@@ -248,7 +256,7 @@ GET /api/quote?th=95000
 │       oracle_pubkey || chain_network ||                 │
 │       base_price || base_stamp || thold_price)          │
 │                                                         │
-│  2. Check local cache (5-min TTL)                       │
+│  2. Check local cache (price-invalidated)               │
 │     └── If found → return with collateral_ratio         │
 │                                                         │
 │  3. Query Nostr relay by d-tag (commit_hash)            │
@@ -273,7 +281,7 @@ Client Request
          ▼
 ┌─────────────────┐         ┌─────────────────┐
 │ Request Handler │────────▶│   Quote Cache   │
-└────────┬────────┘         │  (5-min TTL)    │
+└────────┬────────┘         │(price-invalidated)│
          │                  └────────┬────────┘
          │                           │
          │ (cache miss)              │
