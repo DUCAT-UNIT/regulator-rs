@@ -1197,8 +1197,9 @@ async fn trigger_single_batch_evaluate(
         .await?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("non-success status {}: {}", response.status(), body);
+        anyhow::bail!("non-success status {}: {}", status, body);
     }
 
     Ok(())

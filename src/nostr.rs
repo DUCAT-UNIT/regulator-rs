@@ -143,6 +143,7 @@ impl NostrClient {
 
 /// Calculate commit_hash (d-tag) locally using BIP-340 tagged hash
 /// This allows looking up pre-baked quotes without calling CRE
+/// IMPORTANT: Tag must match cre-hmac/crypto/crypto.go TagPriceCommitHash
 pub fn calculate_commit_hash(
     oracle_pubkey: &str,
     chain_network: &str,
@@ -170,7 +171,7 @@ pub fn calculate_commit_hash(
     preimage.extend_from_slice(&thold_price.to_be_bytes());
 
     // BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || data)
-    let tag = "ducat/price-commit";
+    let tag = "ducat/price_commit_hash";
     let tag_hash = Sha256::digest(tag.as_bytes());
 
     let mut hasher = Sha256::new();

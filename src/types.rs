@@ -305,14 +305,14 @@ mod tests {
         let response = PriceContractResponse {
             chain_network: "mutiny".to_string(),
             oracle_pubkey: "pubkey".to_string(),
-            base_price: 100000,
+            base_price: 100000.0,
             base_stamp: 1700000000,
             commit_hash: "commit".to_string(),
             contract_id: "contract".to_string(),
             oracle_sig: "sig".to_string(),
             thold_hash: "thold".to_string(),
             thold_key: None,
-            thold_price: 95000,
+            thold_price: 95000.0,
         };
 
         let json = serde_json::to_string(&response).expect("should serialize");

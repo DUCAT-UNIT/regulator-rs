@@ -67,6 +67,7 @@ impl CachedQuote {
 }
 
 /// Price and quote cache
+/// Quotes are invalidated when the price changes, not by TTL.
 pub struct QuoteCache {
     /// Latest price observation
     price: RwLock<Option<CachedPrice>>,
@@ -85,10 +86,26 @@ impl QuoteCache {
         }
     }
 
-    /// Update cached price from webhook
+    /// Update cached price from webhook.
+    /// If price changes, all cached quotes are invalidated.
     pub fn update_price(&self, price: CachedPrice) {
-        let mut cache = self.price.write();
-        *cache = Some(price);
+        let price_changed = {
+            let current = self.price.read();
+            match current.as_ref() {
+                None => true,
+                Some(p) => p.base_price != price.base_price || p.base_stamp != price.base_stamp,
+            }
+        };
+
+        {
+            let mut cache = self.price.write();
+            *cache = Some(price);
+        }
+
+        // If price changed, invalidate all cached quotes
+        if price_changed {
+            self.quotes.write().clear();
+        }
     }
 
     /// Get current cached price
@@ -260,5 +277,35 @@ mod tests {
         let (count, has_price) = cache.stats();
         assert_eq!(count, 1);
         assert!(has_price);
+    }
+
+    #[test]
+    fn test_price_change_invalidates_quotes() {
+        let cache = QuoteCache::new(100);
+
+        // Set initial price and add quotes
+        cache.update_price(sample_price());
+        cache.store_quote("commit1".to_string(), sample_quote("commit1", 1000));
+        cache.store_quote("commit2".to_string(), sample_quote("commit2", 2000));
+
+        let (count, _) = cache.stats();
+        assert_eq!(count, 2);
+
+        // Same price should not invalidate
+        cache.update_price(sample_price());
+        let (count, _) = cache.stats();
+        assert_eq!(count, 2);
+
+        // Different price should invalidate all quotes
+        let mut new_price = sample_price();
+        new_price.base_price = 100001;
+        cache.update_price(new_price);
+
+        let (count, _) = cache.stats();
+        assert_eq!(count, 0);
+
+        // Quotes should be gone
+        assert!(cache.get_quote("commit1").is_none());
+        assert!(cache.get_quote("commit2").is_none());
     }
 }
